@@ -12,3 +12,5 @@ LegacyReference/
 .codex
 InvertedPendulum/
 logs/logger_histories
+.venv/
+logs/

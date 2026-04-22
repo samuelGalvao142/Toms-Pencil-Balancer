@@ -330,6 +330,48 @@ def _apply_assignments(raw_config: dict, params_cls, assignments: list[tuple[lis
     return patched
 
 
+def _apply_registry_field_overrides(
+    raw_config: dict,
+    params_cls,
+    spec,
+    assignments: list[tuple[list[str], str]],
+) -> tuple[dict, list[tuple[object, str]]]:
+    registry_fields = spec.registries or {}
+    direct_assignments: list[tuple[list[str], str]] = []
+    nested_registry_assignments: dict[str, list[tuple[list[str], str]]] = {}
+
+    for path, raw_value in assignments:
+        if len(path) > 1 and path[0] in registry_fields:
+            nested_registry_assignments.setdefault(path[0], []).append((path[1:], raw_value))
+        else:
+            direct_assignments.append((path, raw_value))
+
+    patched = _apply_assignments(raw_config, params_cls, direct_assignments)
+    cleanup: list[tuple[object, str]] = []
+
+    for field_name, field_assignments in nested_registry_assignments.items():
+        current_spec_string = patched.get(field_name)
+        if not isinstance(current_spec_string, str) or ":" not in current_spec_string:
+            raise ValueError(
+                f"Cannot apply nested override to '{field_name}' because it is not a registry spec string."
+            )
+
+        sub_registry = registry_fields[field_name]
+        sub_type, sub_preset_name = current_spec_string.split(":", 1)
+        sub_spec = sub_registry[sub_type]
+        sub_raw = _apply_assignments(
+            resolve_preset(sub_spec.Presets, sub_preset_name),
+            sub_spec.Params,
+            field_assignments,
+        )
+        ephemeral_name = f"__cli_{field_name}__"
+        sub_spec.Presets[ephemeral_name] = sub_raw
+        cleanup.append((sub_spec, ephemeral_name))
+        patched[field_name] = f"{sub_type}:{ephemeral_name}"
+
+    return patched, cleanup
+
+
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
@@ -356,17 +398,21 @@ def build_experiment(spec_string: str, overrides: dict):
 
     system_ephemeral_name = None
     system_spec = None
+    cleanup_specs: list[tuple[object, str]] = []
     if system_assignments:
         system_spec_string = raw["system"]
         system_type, system_preset_name = system_spec_string.split(":", 1)
         system_spec = SYSTEM_REGISTRY[system_type]
-        system_raw = _apply_assignments(
+        system_raw, system_cleanup = _apply_registry_field_overrides(
             resolve_preset(system_spec.Presets, system_preset_name),
             SystemParams,
+            system_spec,
             system_assignments,
         )
+        cleanup_specs.extend(system_cleanup)
         system_ephemeral_name = "__cli_system__"
         system_spec.Presets[system_ephemeral_name] = system_raw
+        cleanup_specs.append((system_spec, system_ephemeral_name))
         raw["system"] = f"{system_type}:{system_ephemeral_name}"
 
     # Re-use build_from_registry's inner loop by passing the patched dict
@@ -378,8 +424,8 @@ def build_experiment(spec_string: str, overrides: dict):
         experiment = build_from_registry(registry, f"{type_}:{_EPHEMERAL}")
     finally:
         spec.Presets.pop(_EPHEMERAL, None)
-        if system_spec is not None and system_ephemeral_name is not None:
-            system_spec.Presets.pop(system_ephemeral_name, None)
+        for cleanup_spec, cleanup_name in reversed(cleanup_specs):
+            cleanup_spec.Presets.pop(cleanup_name, None)
 
     return experiment
 
@@ -419,11 +465,15 @@ def resolve_graph_target(graph_arg: str) -> Path:
     if graph_index <= 0:
         raise ValueError(f"--graph index must be positive, got {graph_index}")
 
-    log_dir = Path("logs/logger_histories")
+    log_dir = Path("logs")
     if not log_dir.exists():
         raise FileNotFoundError(f"Log directory does not exist: {log_dir}")
 
-    log_paths = _sorted_logger_chunk_paths(log_dir)
+    log_paths = sorted(
+        (path for path in log_dir.rglob("logger_chunk_*.pkl") if path.is_file()),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+        reverse=True,
+    )
     if not log_paths:
         raise FileNotFoundError(f"No logger chunk pickle files found in {log_dir}")
     if graph_index > len(log_paths):

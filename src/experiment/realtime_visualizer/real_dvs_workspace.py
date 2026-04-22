@@ -84,9 +84,9 @@ class RealDvsWorkspaceVisualizer(RealDvsVisualizer):
             title_str = title
         else:
             title_str = (
-                "Paused - table at center | Space: resume | Q: quit"
+                "Paused - table at center | Space: resume | R: start/stop rec | Q: quit"
                 if is_paused
-                else "Experiment | Space: pause | Q: quit"
+                else "Experiment | Space: pause | R: start/stop rec | Q: quit"
             )
         title_str = self._append_y_meas_banner(title_str, y_meas)
         composite = build_composite(title_str, frame1, frame2, workspace_canvas)

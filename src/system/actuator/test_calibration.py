@@ -130,7 +130,7 @@ def _apply_command(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--port",             default="/dev/ttyUSB0")
+    parser.add_argument("--port",             default="COM7")
     parser.add_argument("--baud",             type=int,   default=115200)
     parser.add_argument("--half-side", type=float, default=0.07,
                         help="half the square side in meters (default: 0.07 → 14×14 cm square)")

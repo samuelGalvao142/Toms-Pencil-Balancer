@@ -128,7 +128,7 @@ class RealDvsVisualizer(RealtimeVisualizerBase):
             self._draw_line(frame1, b1, s1, top_mask_y=self.top_mask_y_cam1, mask_y=self.mask_y_cam1)
             self._draw_line(frame2, b2, s2, top_mask_y=self.top_mask_y_cam2, mask_y=self.mask_y_cam2)
 
-        title_str = title if title is not None else "Experiment | Q: quit"
+        title_str = title if title is not None else "Experiment | R: start/stop rec | Q: quit"
         title_str = self._append_y_meas_banner(title_str, y_meas)
         composite = build_composite(title_str, frame1, frame2, None)
         cv2.imshow(self._window_name, composite)

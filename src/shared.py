@@ -56,7 +56,7 @@ class TimingParams:
     actuator_dt: float
 
 TIMING_PRESETS = {
-    "default": {"total_time": 20.0, "dt": 3e-3, "actuator_dt": 3e-3},
+    "default": {"total_time": 10.0, "dt": 3e-3, "actuator_dt": 3e-3},
     "ideal": {"total_time": 5.0, "dt": 1e-3},
     "long":    {"total_time": 30.0, "dt": 4e-3},
 }

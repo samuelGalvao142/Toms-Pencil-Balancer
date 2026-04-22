@@ -103,7 +103,7 @@ class RealServoSupervisorBase(Supervisor):
     _LEFT_KEYS = {81, 2424832, 65361, ord("a"), ord("A")}
     _RIGHT_KEYS = {83, 2555904, 65363, ord("d"), ord("D")}
     _ACCEPT_KEYS = {10, 13}
-    _RESET_KEYS = {ord("r"), ord("R")}
+    _RESET_KEYS = {ord("c"), ord("C")}
     _REACQUIRE_KEYS = {ord(" ")}
 
     def __init__(self, params: RealStartupParams):

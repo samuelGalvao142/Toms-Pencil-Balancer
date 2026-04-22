@@ -128,6 +128,10 @@ class Logger:
         self._active_chunk_start_idx: int | None = None
         self._saved_chunks: set[tuple[int, int]] = set()
 
+    def set_save_dir(self, save_dir: str | Path) -> None:
+        self.params.save_dir = str(save_dir)
+        self._save_dir = Path(save_dir)
+
     def reset(self, initial_step_data: StepData):
         self._states = [initial_step_data.x.as_vector()]
         x_hat0 = initial_step_data.x_hat if initial_step_data.x_hat is not None else initial_step_data.x

@@ -1,4 +1,5 @@
 from argparse import Namespace
+from dataclasses import dataclass, field
 import sys
 import types
 from pathlib import Path
@@ -53,7 +54,8 @@ if str(ROOT) not in sys.path:
 
 _install_control_stub()
 
-from main import build_experiment, collect_overrides
+from main import _apply_registry_field_overrides, build_experiment, collect_overrides
+from src.shared import Spec
 
 
 def _args(**updates):
@@ -129,3 +131,51 @@ def test_build_experiment_overrides_experiment_nested_dataclass_field():
     experiment = build_experiment("default:sim", overrides)
 
     assert experiment.dt == 0.01
+
+
+def test_apply_registry_field_overrides_rebuilds_nested_registry_collaborator():
+    @dataclass
+    class WriterParams:
+        enabled: bool = False
+        camera_id: int = 1
+        file_stem: str | None = None
+
+    @dataclass
+    class SensorParams:
+        writer: WriterParams = field(default_factory=WriterParams)
+
+    @dataclass
+    class FakeSystemParams:
+        sensor: object
+
+    sensor_spec = Spec(
+        cls=object,
+        Params=SensorParams,
+        Presets={"default": {"writer": {"enabled": False, "camera_id": 1}}},
+        registries=None,
+    )
+    fake_system_spec = Spec(
+        cls=object,
+        Params=FakeSystemParams,
+        Presets={"default": {"sensor": "fake_sensor:default"}},
+        registries={"sensor": {"fake_sensor": sensor_spec}},
+    )
+
+    patched, cleanup = _apply_registry_field_overrides(
+        {"sensor": "fake_sensor:default"},
+        FakeSystemParams,
+        fake_system_spec,
+        [
+            (["sensor", "writer", "enabled"], "true"),
+            (["sensor", "writer", "camera_id"], "2"),
+            (["sensor", "writer", "file_stem"], "hough_cam2"),
+        ],
+    )
+
+    assert patched["sensor"] == "fake_sensor:__cli_sensor__"
+    assert sensor_spec.Presets["__cli_sensor__"]["writer"]["enabled"] is True
+    assert sensor_spec.Presets["__cli_sensor__"]["writer"]["camera_id"] == 2
+    assert sensor_spec.Presets["__cli_sensor__"]["writer"]["file_stem"] == "hough_cam2"
+
+    for cleanup_spec, cleanup_name in cleanup:
+        cleanup_spec.Presets.pop(cleanup_name, None)

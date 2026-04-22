@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from pathlib import Path
 import threading
 import time
 
@@ -17,6 +18,7 @@ from src.system.sensor.reader.dvs_camera_reader import (
     discover_devices,
 )
 from src.system.sensor.algo.dvs_algorithms import mask_events_between_y_lines
+from src.system.sensor.writer import DVSWriter, DVSWriterParams
 
 from src.shared import default_camera_params
 
@@ -29,6 +31,7 @@ class RealDVSParams:
     cam1_device:              str | None = None
     cam2_device:              str | None = None
     noise_filter_duration_ms: float | None = None
+    writer:                   DVSWriterParams = field(default_factory=DVSWriterParams)
 
 
 REAL_DVS_PRESETS = {
@@ -38,6 +41,7 @@ REAL_DVS_PRESETS = {
         "noise_filter_duration_ms": None,
         "cam1_device":              None,
         "cam2_device":              None,
+        "writer":                   {"enabled": False},
     },
     "sam": {
         "base":                     "hough",
@@ -103,6 +107,11 @@ class RealEventCameraInterface(VisionModelBase):
 
         self._reader1 = DVSReader(cam1_device, noise_filter_duration_ms=noise_filter_duration_ms)
         self._reader2 = DVSReader(cam2_device, noise_filter_duration_ms=noise_filter_duration_ms)
+        self._writer = DVSWriter(
+            p.writer,
+            width=self.cam_width_px,
+            height=self.cam_height_px,
+        )
 
         self._latest1: CameraObservation | None = None
         self._latest2: CameraObservation | None = None
@@ -142,9 +151,9 @@ class RealEventCameraInterface(VisionModelBase):
                 batches.append(b)
 
             if batches:
-                events = np.concatenate(batches)
+                raw_events = np.concatenate(batches)
                 events = mask_events_between_y_lines(
-                    events,
+                    raw_events,
                     min_line_y=top_mask_y,
                     max_line_y=mask_y,
                     frame_height=self.cam_height_px,
@@ -153,6 +162,13 @@ class RealEventCameraInterface(VisionModelBase):
                 if len(events) > 0:
                     np.add.at(surface, (events["y"], events["x"]), 1.0)
                 result = algo.update(events)
+                if self._writer.enabled and _cam_id == self._writer.camera_id:
+                    self._writer.record_batch(
+                        raw_events=raw_events,
+                        processed_events=events,
+                        observation=result,
+                        algo=algo,
+                    )
                 if not isinstance(result, tuple):
                     with self._lock:
                         if _cam_id == 1:
@@ -170,6 +186,27 @@ class RealEventCameraInterface(VisionModelBase):
     def get_event_accumulator_frames(self) -> tuple[np.ndarray, np.ndarray] | None:
         """Alias for :meth:`get_surfaces` — decaying event-accumulator images for display."""
         return self.get_surfaces()
+
+    @property
+    def recording_enabled(self) -> bool:
+        return bool(self._writer.enabled)
+
+    @property
+    def recording_active(self) -> bool:
+        return bool(self._writer.is_recording)
+
+    @property
+    def recording_paths(self) -> tuple[Path | None, Path | None]:
+        return self._writer.aedat4_path, self._writer.csv_path
+
+    def start_recording(self) -> bool:
+        return self._writer.start_recording()
+
+    def stop_recording(self) -> bool:
+        return self._writer.stop_recording()
+
+    def toggle_recording(self) -> bool:
+        return self._writer.toggle_recording()
 
     def get_y(self, state_true=None) -> Measurement:
         cams_camnorm = self.get_z()
@@ -241,5 +278,6 @@ class RealEventCameraInterface(VisionModelBase):
         self._stop.set()
         self._thread1.join(timeout=1.0)
         self._thread2.join(timeout=1.0)
+        self._writer.close()
         self._reader1.close()
         self._reader2.close()

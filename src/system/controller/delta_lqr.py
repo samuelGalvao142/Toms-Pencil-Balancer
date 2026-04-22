@@ -77,7 +77,7 @@ DELTA_LQR_PRESETS = {
         "max_delta_u": 2.0e-3,
         "max_command_radius": 7.0e-2,
 
-        "pos_ref_ki": 0.0,
+        "pos_ref_ki": 0.1,
         "max_pos_ref_shift": 10e-3,
 
         # Tilt feedforward: slow I-term on position error -> injected into u
@@ -92,12 +92,12 @@ DELTA_LQR_PRESETS = {
     },
     "strong": {
         "base": "default",
-        "q_pos": 5.0,
+        "q_pos": 0.5,
         "q_vel": 0.0,
-        "q_tilt": 3.0,
+        "q_tilt": 10.0,
         "q_tilt_rate": 0.0,
-        "max_delta_u": 8.0e-3,
-        "r_delta_u": 100,
+        "max_delta_u": 5.0e-3,
+        "r_delta_u": 1050,
     },
 }
 
@@ -275,7 +275,7 @@ class DeltaLQRController(BaseController):
 
         u = self._limit_command_radius(u)
         
-        self._print_ref(state)
+        #self._print_ref(state)
 
         return ControlInput(float(u[0]), float(u[1]))
 

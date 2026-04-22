@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
 import time
+from pathlib import Path
 
 import numpy as np
 
 from src.experiment.logger import TerminalInfo
+from src.experiment.log_paths import allocate_run_log_dir
 from src.shared import TimingParams, default_timing
 
 
@@ -114,6 +116,7 @@ class Experiment:
         self.scheduler            = p.scheduler
         self.dt                   = getattr(self.scheduler, "dt", p.timing.dt)
         self.n_trials             = p.n_trials
+        self._run_log_dir: Path | None = None
 
         if hasattr(self.pacing, "dt"):
             self.pacing.dt = self.dt
@@ -125,6 +128,7 @@ class Experiment:
                 self.realtime_visualizer._event_frames_fn = (
                     self.system.sensor.get_event_accumulator_frames
                 )
+        self._configure_run_log_dir()
 
     def _supervisor_title(self) -> str | None:
         state_name = getattr(self.system.supervisor, "state_name", None)
@@ -132,16 +136,19 @@ class Experiment:
             return (
                 "Ready | "
                 f"WASD: tilt trim {self._tilt_trim_text()} | "
+                f"{self._recording_hint_text()}"
             )
         if state_name in {"STABILIZATION", "STABILIZING", "stabilizing"}:
             return (
                 "Stabilizing | "
-                f"WASD: tilt trim {self._tilt_trim_text()} |"
+                f"WASD: tilt trim {self._tilt_trim_text()} | "
+                f"{self._recording_hint_text()}"
             )
         if state_name == "BALANCED":
             return (
                 "Balanced | "
                 f"WASD: trim {self._tilt_trim_text()} | "
+                f"{self._recording_hint_text()}"
             )
         return None
 
@@ -149,6 +156,14 @@ class Experiment:
         angle_offset = getattr(self.system.supervisor, "measurement_angle_offset", (0.0, 0.0))
         ax_deg, ay_deg = np.rad2deg(np.asarray(angle_offset, dtype=float).reshape(2))
         return f"ax={ax_deg:+.1f} ay={ay_deg:+.1f} deg"
+
+    def _recording_hint_text(self) -> str:
+        sensor = getattr(self.system, "sensor", None)
+        if sensor is None or not bool(getattr(sensor, "recording_enabled", False)):
+            return "R: rec unavailable"
+        if bool(getattr(sensor, "recording_active", False)):
+            return "REC ON | R: stop rec"
+        return "REC OFF | R: start rec"
 
     def run_trial(self):
         self.reset()
@@ -168,7 +183,8 @@ class Experiment:
                     title=self._supervisor_title(),
                 )
                 if vr.key is not None and hasattr(self.system.supervisor, "handle_key"):
-                    self.system.supervisor.handle_key(vr.key)
+                    if not self._handle_runtime_key(vr.key):
+                        self.system.supervisor.handle_key(vr.key)
                 if vr.quit:
                     break
             self.pacing.pace()
@@ -200,9 +216,56 @@ class Experiment:
 
     def run_experiment(self):
         results = []
+        try:
+            for _ in range(self.n_trials):
+                result = self.run_trial()
+                results.append(result)
+            return results
+        finally:
+            sensor = getattr(self.system, "sensor", None)
+            if sensor is not None and hasattr(sensor, "close"):
+                sensor.close()
 
-        for _ in range(self.n_trials):
-            result = self.run_trial()
-            results.append(result)
+    def _configure_run_log_dir(self) -> None:
+        run_log_dir = allocate_run_log_dir("logs")
+        self._run_log_dir = run_log_dir
 
-        return results
+        if hasattr(self.logger, "set_save_dir"):
+            self.logger.set_save_dir(run_log_dir)
+
+        sensor = getattr(self.system, "sensor", None)
+        writer = getattr(sensor, "_writer", None)
+        if writer is not None and hasattr(writer, "set_output_dir"):
+            writer.set_output_dir(run_log_dir)
+
+        print(f"[experiment] logging to {run_log_dir}")
+        if sensor is not None and bool(getattr(sensor, "recording_enabled", False)):
+            print("[experiment] recording armed: focus the visualization window and press R to start/stop.")
+
+    def _handle_runtime_key(self, key: int | None) -> bool:
+        if key is None:
+            return False
+
+        key_low = key & 0xFF
+        if key_low not in (ord("r"), ord("R")):
+            return False
+
+        sensor = getattr(self.system, "sensor", None)
+        if sensor is None or not hasattr(sensor, "toggle_recording"):
+            return False
+        if not bool(getattr(sensor, "recording_enabled", False)):
+            return False
+
+        is_recording = sensor.toggle_recording()
+        state_text = "started" if is_recording else "stopped"
+        paths = getattr(sensor, "recording_paths", (None, None))
+        aedat4_path, csv_path = paths if isinstance(paths, tuple) and len(paths) == 2 else (None, None)
+        if is_recording:
+            print(f"[experiment] recording {state_text}")
+            if aedat4_path is not None:
+                print(f"[experiment] aedat4 -> {aedat4_path}")
+            if csv_path is not None:
+                print(f"[experiment] hough csv -> {csv_path}")
+        else:
+            print(f"[experiment] recording {state_text}")
+        return True
