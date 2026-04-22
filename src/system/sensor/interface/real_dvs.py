@@ -143,12 +143,17 @@ class RealEventCameraInterface(VisionModelBase):
         mask_y = self._dvs_mask_line_y_cam1 if _cam_id == 1 else self._dvs_mask_line_y_cam2
         top_mask_y = self._dvs_top_mask_line_y_cam1 if _cam_id == 1 else self._dvs_top_mask_line_y_cam2
         while not self._stop.is_set() and reader.is_running():
+            native_batches = []
             batches = []
             while True:
-                b = reader.get_event_batch()
-                if b is None or len(b) == 0:
+                native_batch = reader.get_event_batch_native()
+                if native_batch is None:
                     break
-                batches.append(b)
+                batch = native_batch.numpy()
+                if len(batch) == 0:
+                    break
+                native_batches.append(native_batch)
+                batches.append(batch)
 
             if batches:
                 raw_events = np.concatenate(batches)
@@ -164,6 +169,7 @@ class RealEventCameraInterface(VisionModelBase):
                 result = algo.update(events)
                 if self._writer.enabled and _cam_id == self._writer.camera_id:
                     self._writer.record_batch(
+                        raw_event_batches=native_batches,
                         raw_events=raw_events,
                         processed_events=events,
                         observation=result,

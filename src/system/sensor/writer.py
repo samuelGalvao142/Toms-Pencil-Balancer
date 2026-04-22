@@ -7,6 +7,7 @@ from pathlib import Path
 from queue import SimpleQueue
 import threading
 import time
+from typing import Any
 
 import numpy as np
 
@@ -98,7 +99,8 @@ class DVSWriter:
     def record_batch(
         self,
         *,
-        raw_events: np.ndarray,
+        raw_event_batches=None,
+        raw_events: np.ndarray | None = None,
         processed_events: np.ndarray,
         observation,
         algo,
@@ -109,10 +111,15 @@ class DVSWriter:
         queue = self._queue
         if queue is None:
             return
+        native_batches = self._normalize_native_batches(raw_event_batches)
+        queued_raw_events = raw_events
+        if native_batches:
+            queued_raw_events = None
         queue.put(
             (
-                raw_events,
-                self._measurement_timestamp_us(processed_events, raw_events),
+                native_batches,
+                queued_raw_events,
+                self._measurement_timestamp_us(processed_events, raw_events, native_batches),
                 self._state_value(algo, "linear_m"),
                 self._state_value(algo, "linear_b"),
             )
@@ -282,11 +289,20 @@ class DVSWriter:
                 return events_np[candidate]
         return None
 
-    def _measurement_timestamp_us(self, processed_events: np.ndarray, raw_events: np.ndarray) -> int:
+    def _measurement_timestamp_us(
+        self,
+        processed_events: np.ndarray,
+        raw_events: np.ndarray | None,
+        raw_event_batches: list[Any] | None,
+    ) -> int:
         if processed_events is not None and len(processed_events) > 0:
             return int(self._event_timestamps(processed_events)[-1])
         if raw_events is not None and len(raw_events) > 0:
             return int(self._event_timestamps(raw_events)[-1])
+        if raw_event_batches:
+            timestamp = self._native_batches_last_timestamp_us(raw_event_batches)
+            if timestamp is not None:
+                return timestamp
         return int(max(time.time_ns() // 1000, self._last_timestamp_us + 1))
 
     @staticmethod
@@ -305,13 +321,79 @@ class DVSWriter:
             if payload is self._sentinel:
                 break
 
-            raw_events, timestamp_us, lin_m, lin_b = payload
-            pos_store, neg_store, pos_count, neg_count = self._events_to_stores(raw_events)
-            if pos_count > 0:
-                self._write_event_store(pos_store, self.POSITIVE_STREAM)
-            if neg_count > 0:
-                self._write_event_store(neg_store, self.NEGATIVE_STREAM)
+            native_batches, raw_events, timestamp_us, lin_m, lin_b = payload
+            if native_batches:
+                self._write_native_batches(native_batches)
+            elif raw_events is not None and len(raw_events) > 0:
+                pos_store, neg_store, pos_count, neg_count = self._events_to_stores(raw_events)
+                if pos_count > 0:
+                    self._write_event_store(pos_store, self.POSITIVE_STREAM)
+                if neg_count > 0:
+                    self._write_event_store(neg_store, self.NEGATIVE_STREAM)
             self._write_hough_row(timestamp_us=timestamp_us, lin_m=lin_m, lin_b=lin_b)
+
+    def _normalize_native_batches(self, raw_event_batches) -> list[Any] | None:
+        if raw_event_batches is None:
+            return None
+        if isinstance(raw_event_batches, list):
+            return [batch for batch in raw_event_batches if batch is not None]
+        return [raw_event_batches] if raw_event_batches is not None else None
+
+    def _write_native_batches(self, native_batches: list[Any]) -> None:
+        for batch in native_batches:
+            pos_store, neg_store = self._split_native_event_batch(batch)
+            if self._native_batch_size(pos_store) > 0:
+                self._write_event_store(pos_store, self.POSITIVE_STREAM)
+            if self._native_batch_size(neg_store) > 0:
+                self._write_event_store(neg_store, self.NEGATIVE_STREAM)
+
+    def _split_native_event_batch(self, native_batch):
+        if self._dv is not None and hasattr(self._dv, "EventPolarityFilter"):
+            pos_filter = self._dv.EventPolarityFilter(True)
+            pos_filter.accept(native_batch)
+            neg_filter = self._dv.EventPolarityFilter(False)
+            neg_filter.accept(native_batch)
+            return pos_filter.generateEvents(), neg_filter.generateEvents()
+
+        native_numpy = native_batch.numpy()
+        pos_store, neg_store, _pos_count, _neg_count = self._events_to_stores(native_numpy)
+        return pos_store, neg_store
+
+    def _native_batch_size(self, batch) -> int:
+        size_attr = getattr(batch, "size", None)
+        if callable(size_attr):
+            return int(size_attr())
+        if isinstance(size_attr, int):
+            return int(size_attr)
+        try:
+            return len(batch)
+        except TypeError:
+            numpy_batch = batch.numpy()
+            return int(len(numpy_batch))
+
+    def _native_batches_last_timestamp_us(self, native_batches: list[Any]) -> int | None:
+        for batch in reversed(native_batches):
+            timestamp = self._native_batch_last_timestamp_us(batch)
+            if timestamp is not None:
+                self._last_timestamp_us = max(self._last_timestamp_us, timestamp)
+                return timestamp
+        return None
+
+    def _native_batch_last_timestamp_us(self, native_batch) -> int | None:
+        highest_time = getattr(native_batch, "getHighestTime", None)
+        if callable(highest_time):
+            try:
+                timestamp = highest_time()
+            except TypeError:
+                timestamp = None
+            else:
+                if timestamp is not None:
+                    return int(timestamp)
+
+        numpy_batch = native_batch.numpy()
+        if len(numpy_batch) == 0:
+            return None
+        return int(self._event_timestamps(numpy_batch)[-1])
 
     def _stop_worker(self) -> None:
         queue = self._queue

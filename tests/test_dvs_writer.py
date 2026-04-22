@@ -21,6 +21,50 @@ def _install_dv_processing_stub():
         def push_back(self, timestamp, x, y, polarity):
             self.events.append((timestamp, x, y, polarity))
 
+        def size(self):
+            return len(self.events)
+
+        def numpy(self):
+            return np.array(
+                self.events,
+                dtype=[
+                    ("t", np.int64),
+                    ("x", np.int16),
+                    ("y", np.int16),
+                    ("p", np.bool_),
+                ],
+            )
+
+    class NativeBatch:
+        def __init__(self, events):
+            self._events = events
+
+        def numpy(self):
+            return self._events
+
+        def getHighestTime(self):
+            return int(self._events["t"][-1])
+
+    class EventPolarityFilter:
+        def __init__(self, polarity):
+            self._polarity = bool(polarity)
+            self._events = None
+
+        def accept(self, events):
+            self._events = events
+
+        def generateEvents(self):
+            filtered = EventStore()
+            for event in self._events.numpy():
+                if bool(event["p"]) == self._polarity:
+                    filtered.push_back(
+                        int(event["t"]),
+                        int(event["x"]),
+                        int(event["y"]),
+                        bool(event["p"]),
+                    )
+            return filtered
+
     class Config:
         def __init__(self, camera_name):
             self.camera_name = camera_name
@@ -49,6 +93,8 @@ def _install_dv_processing_stub():
 
     MonoCameraWriter.Config = Config
     stub.EventStore = EventStore
+    stub.EventPolarityFilter = EventPolarityFilter
+    stub.NativeBatch = NativeBatch
     stub.io = types.SimpleNamespace(MonoCameraWriter=MonoCameraWriter)
     sys.modules["dv_processing"] = stub
     return stub
@@ -227,3 +273,53 @@ def test_dvs_writer_toggle_recording_creates_new_segment_names(tmp_path: Path):
     assert writer.is_recording is False
     assert writer.start_recording() is True
     assert writer.aedat4_path == tmp_path / "trial01_rec02_cam1.aedat4"
+
+
+def test_dvs_writer_records_native_batches_without_rebuilding_events_in_python(tmp_path: Path):
+    dv_stub = _install_dv_processing_stub()
+
+    from src.system.sensor.writer import DVSWriter, DVSWriterParams
+
+    writer = DVSWriter(
+        DVSWriterParams(
+            enabled=True,
+            camera_id=1,
+            output_dir=str(tmp_path),
+            file_stem="native",
+            camera_name="DAVIS346-test",
+        ),
+        width=346,
+        height=260,
+    )
+    assert writer.start_recording() is True
+
+    algo = types.SimpleNamespace(
+        state=types.SimpleNamespace(
+            linear_m=4.0,
+            linear_b=5.0,
+        ),
+    )
+
+    raw_events = _events()
+    writer.record_batch(
+        raw_event_batches=[dv_stub.NativeBatch(raw_events)],
+        processed_events=raw_events[:2],
+        observation=None,
+        algo=algo,
+    )
+    assert writer.stop_recording() is True
+
+    writer_stub = dv_stub.io.MonoCameraWriter.last_instance
+    assert [name for name, _events_written in writer_stub.writes] == [
+        "events_positive",
+        "events_negative",
+    ]
+    assert len(writer_stub.writes[0][1]) == 2
+    assert len(writer_stub.writes[1][1]) == 1
+
+    csv_path = tmp_path / "native_cam1_hough.csv"
+    rows = csv_path.read_text(encoding="utf-8").strip().splitlines()
+    assert rows == [
+        "timestamp_us,lin_m,lin_b",
+        "1001,4.0,5.0",
+    ]

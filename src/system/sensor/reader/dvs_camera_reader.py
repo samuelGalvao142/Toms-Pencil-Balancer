@@ -4,7 +4,6 @@ Wraps dv-processing for opening cameras and reading event batches.
 """
 
 import datetime
-import threading
 import numpy as np
 
 # DAVIS346 resolution
@@ -81,13 +80,24 @@ class DVSReader:
         Returns None if no events available.
         If noise_filter_duration_ms was set, events are filtered before conversion to numpy.
         """
+        events = self.get_event_batch_native()
+        if events is None:
+            return None
+        return events.numpy()
+
+    def get_event_batch_native(self):
+        """
+        Get next native dv-processing event batch from the camera.
+        Returns None if no events are available.
+        If noise_filter_duration_ms was set, events are filtered before being returned.
+        """
         events = self._capture.getNextEventBatch()
         if events is None:
             return None
         if self._noise_filter is not None:
             self._noise_filter.accept(events)
             events = self._noise_filter.generateEvents()
-        return events.numpy()
+        return events
 
     def is_running(self) -> bool:
         """Whether the camera is still running."""
