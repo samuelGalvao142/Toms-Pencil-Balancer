@@ -22,8 +22,7 @@ class DVSWriterParams:
 
 
 class DVSWriter:
-    POSITIVE_STREAM = "events_positive"
-    NEGATIVE_STREAM = "events_negative"
+    DEFAULT_STREAM = "events"
 
     def __init__(self, params: DVSWriterParams, *, width: int, height: int):
         self.params = params
@@ -177,15 +176,10 @@ class DVSWriter:
         self._dv = dv
         config = dv.io.MonoCameraWriter.Config(self.params.camera_name)
         resolution = (self.width, self.height)
-        if not self._try_add_named_event_stream(config, resolution, self.POSITIVE_STREAM):
+        if not self._try_add_named_event_stream(config, resolution, self.DEFAULT_STREAM):
             raise RuntimeError(
-                "The installed dv_processing Python bindings do not expose named "
-                "event streams required to store positive/negative events separately."
-            )
-        if not self._try_add_named_event_stream(config, resolution, self.NEGATIVE_STREAM):
-            raise RuntimeError(
-                "The installed dv_processing Python bindings do not expose named "
-                "event streams required to store positive/negative events separately."
+                "The installed dv_processing Python bindings do not expose an event "
+                "stream configuration compatible with AEDAT4 writing."
             )
         if self.aedat4_path is None:
             raise RuntimeError("AEDAT4 output path was not initialized.")
@@ -228,40 +222,29 @@ class DVSWriter:
             }
         )
 
-    def _events_to_stores(self, events_np: np.ndarray):
+    def _events_to_store(self, events_np: np.ndarray):
         timestamps = self._event_timestamps(events_np)
         xs = np.asarray(events_np["x"], dtype=np.int64)
         ys = np.asarray(events_np["y"], dtype=np.int64)
         polarity = self._extract_field(events_np, ("p", "polarity"))
-        if polarity is None:
-            raise ValueError(
-                "Event recording is enabled, but the event batch does not contain a polarity field."
-            )
-        polarity = np.asarray(polarity, dtype=bool)
-
-        pos_store = self._dv.EventStore()
-        neg_store = self._dv.EventStore()
+        all_store = self._dv.EventStore()
+        if polarity is not None:
+            polarity = np.asarray(polarity, dtype=bool)
         if timestamps.size > 1 and np.any(np.diff(timestamps) < 0):
             indices = np.argsort(timestamps, kind="stable")
         else:
             indices = range(len(timestamps))
 
-        pos_count = 0
-        neg_count = 0
         for idx in indices:
-            if bool(polarity[idx]):
-                target_store = pos_store
-                pos_count += 1
-            else:
-                target_store = neg_store
-                neg_count += 1
-            target_store.push_back(
+            event_polarity = bool(polarity[idx]) if polarity is not None else True
+            event = (
                 int(timestamps[idx]),
                 int(xs[idx]),
                 int(ys[idx]),
-                bool(polarity[idx]),
+                event_polarity,
             )
-        return pos_store, neg_store, pos_count, neg_count
+            all_store.push_back(*event)
+        return all_store
 
     def _event_timestamps(self, events_np: np.ndarray) -> np.ndarray:
         if events_np is None or len(events_np) == 0:
@@ -325,11 +308,8 @@ class DVSWriter:
             if native_batches:
                 self._write_native_batches(native_batches)
             elif raw_events is not None and len(raw_events) > 0:
-                pos_store, neg_store, pos_count, neg_count = self._events_to_stores(raw_events)
-                if pos_count > 0:
-                    self._write_event_store(pos_store, self.POSITIVE_STREAM)
-                if neg_count > 0:
-                    self._write_event_store(neg_store, self.NEGATIVE_STREAM)
+                all_store = self._events_to_store(raw_events)
+                self._write_event_store(all_store, self.DEFAULT_STREAM)
             self._write_hough_row(timestamp_us=timestamp_us, lin_m=lin_m, lin_b=lin_b)
 
     def _normalize_native_batches(self, raw_event_batches) -> list[Any] | None:
@@ -341,35 +321,7 @@ class DVSWriter:
 
     def _write_native_batches(self, native_batches: list[Any]) -> None:
         for batch in native_batches:
-            pos_store, neg_store = self._split_native_event_batch(batch)
-            if self._native_batch_size(pos_store) > 0:
-                self._write_event_store(pos_store, self.POSITIVE_STREAM)
-            if self._native_batch_size(neg_store) > 0:
-                self._write_event_store(neg_store, self.NEGATIVE_STREAM)
-
-    def _split_native_event_batch(self, native_batch):
-        if self._dv is not None and hasattr(self._dv, "EventPolarityFilter"):
-            pos_filter = self._dv.EventPolarityFilter(True)
-            pos_filter.accept(native_batch)
-            neg_filter = self._dv.EventPolarityFilter(False)
-            neg_filter.accept(native_batch)
-            return pos_filter.generateEvents(), neg_filter.generateEvents()
-
-        native_numpy = native_batch.numpy()
-        pos_store, neg_store, _pos_count, _neg_count = self._events_to_stores(native_numpy)
-        return pos_store, neg_store
-
-    def _native_batch_size(self, batch) -> int:
-        size_attr = getattr(batch, "size", None)
-        if callable(size_attr):
-            return int(size_attr())
-        if isinstance(size_attr, int):
-            return int(size_attr)
-        try:
-            return len(batch)
-        except TypeError:
-            numpy_batch = batch.numpy()
-            return int(len(numpy_batch))
+            self._write_event_store(batch, self.DEFAULT_STREAM)
 
     def _native_batches_last_timestamp_us(self, native_batches: list[Any]) -> int | None:
         for batch in reversed(native_batches):

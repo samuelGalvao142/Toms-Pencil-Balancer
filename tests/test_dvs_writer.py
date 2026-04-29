@@ -45,26 +45,6 @@ def _install_dv_processing_stub():
         def getHighestTime(self):
             return int(self._events["t"][-1])
 
-    class EventPolarityFilter:
-        def __init__(self, polarity):
-            self._polarity = bool(polarity)
-            self._events = None
-
-        def accept(self, events):
-            self._events = events
-
-        def generateEvents(self):
-            filtered = EventStore()
-            for event in self._events.numpy():
-                if bool(event["p"]) == self._polarity:
-                    filtered.push_back(
-                        int(event["t"]),
-                        int(event["x"]),
-                        int(event["y"]),
-                        bool(event["p"]),
-                    )
-            return filtered
-
     class Config:
         def __init__(self, camera_name):
             self.camera_name = camera_name
@@ -93,7 +73,6 @@ def _install_dv_processing_stub():
 
     MonoCameraWriter.Config = Config
     stub.EventStore = EventStore
-    stub.EventPolarityFilter = EventPolarityFilter
     stub.NativeBatch = NativeBatch
     stub.io = types.SimpleNamespace(MonoCameraWriter=MonoCameraWriter)
     sys.modules["dv_processing"] = stub
@@ -116,7 +95,7 @@ def _events():
     )
 
 
-def test_dvs_writer_records_two_event_streams_and_hough_csv(tmp_path: Path):
+def test_dvs_writer_records_events_and_hough_csv(tmp_path: Path):
     _install_dv_processing_stub()
 
     from src.system.sensor.writer import DVSWriter, DVSWriterParams
@@ -164,15 +143,12 @@ def test_dvs_writer_records_two_event_streams_and_hough_csv(tmp_path: Path):
     assert writer_stub is not None
     assert writer_stub.closed is True
     assert [stream["name"] for stream in writer_stub.config.event_streams] == [
-        "events_positive",
-        "events_negative",
+        "events",
     ]
     assert [name for name, _events_written in writer_stub.writes] == [
-        "events_positive",
-        "events_negative",
+        "events",
     ]
-    assert len(writer_stub.writes[0][1]) == 2
-    assert len(writer_stub.writes[1][1]) == 1
+    assert len(writer_stub.writes[0][1]) == 3
 
     csv_path = tmp_path / "trial01_cam1_hough.csv"
     assert csv_path.exists()
@@ -311,11 +287,9 @@ def test_dvs_writer_records_native_batches_without_rebuilding_events_in_python(t
 
     writer_stub = dv_stub.io.MonoCameraWriter.last_instance
     assert [name for name, _events_written in writer_stub.writes] == [
-        "events_positive",
-        "events_negative",
+        "events",
     ]
-    assert len(writer_stub.writes[0][1]) == 2
-    assert len(writer_stub.writes[1][1]) == 1
+    assert len(writer_stub.writes[0][1]) == 3
 
     csv_path = tmp_path / "native_cam1_hough.csv"
     rows = csv_path.read_text(encoding="utf-8").strip().splitlines()
