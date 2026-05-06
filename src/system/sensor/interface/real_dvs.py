@@ -52,6 +52,15 @@ REAL_DVS_PRESETS = {
         "base":                     "hough",
         "obs_model":                "analytic:default",
     },
+    "snn": {
+        "base": "hough",
+        "algo": "snn:default",
+        "obs_model": "simple:default",
+        "noise_filter_duration_ms": None,
+        "cam1_device": None,
+        "cam2_device": None,
+        "writer": {"enabled": False},
+    },
 }
 
 
