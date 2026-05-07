@@ -151,6 +151,7 @@ class RealEventCameraInterface(VisionModelBase):
         surface = self._surface1 if _cam_id == 1 else self._surface2
         mask_y = self._dvs_mask_line_y_cam1 if _cam_id == 1 else self._dvs_mask_line_y_cam2
         top_mask_y = self._dvs_top_mask_line_y_cam1 if _cam_id == 1 else self._dvs_top_mask_line_y_cam2
+        last_algo_error: str | None = None
         while not self._stop.is_set() and reader.is_running():
             native_batches = []
             batches = []
@@ -175,7 +176,17 @@ class RealEventCameraInterface(VisionModelBase):
                 surface *= self._decay_display
                 if len(events) > 0:
                     np.add.at(surface, (events["y"], events["x"]), 1.0)
-                result = algo.update(events)
+                try:
+                    result = algo.update(events)
+                except Exception as exc:
+                    error_text = f"[real_dvs] cam{_cam_id} algo.update failed: {exc}"
+                    if error_text != last_algo_error:
+                        print(error_text)
+                        last_algo_error = error_text
+                    time.sleep(0.01)
+                    continue
+
+                last_algo_error = None
                 if self._writer.enabled and _cam_id == self._writer.camera_id:
                     self._writer.record_batch(
                         raw_event_batches=native_batches,
