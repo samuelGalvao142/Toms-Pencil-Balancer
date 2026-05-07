@@ -20,11 +20,11 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in some en
 
 
 _LEGACY_SLOPE_MODEL_PATH = (
-    r"C:\Users\pcadm\Downloads\SNN\SNN-Regression-Pencil-Balancer-True\models\lin_m"
+    r"C:\Users\pcadm\Downloads\SNN\SNN-Regression-Pencil-Balancer-True\models\modelSlope"
     r"\model_SEW_BN\checkpoints_pendulum\best_model_weights.pth"
 )
 _LEGACY_INTERCEPT_MODEL_PATH = (
-    r"C:\Users\pcadm\Downloads\SNN\SNN-Regression-Pencil-Balancer-True\models\lin_b"
+    r"C:\Users\pcadm\Downloads\SNN\SNN-Regression-Pencil-Balancer-True\models\modelIntercept"
     r"\model_SEW_BN\checkpoints_pendulum\best_model_weights.pth"
 )
 
