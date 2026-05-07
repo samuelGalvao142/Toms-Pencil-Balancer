@@ -154,8 +154,8 @@ def test_dvs_writer_records_events_and_hough_csv(tmp_path: Path):
     assert csv_path.exists()
     rows = csv_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(rows) == 2
-    assert rows[0] == "timestamp_us,lin_m,lin_b"
-    assert rows[1] == "1001,4.0,5.0"
+    assert rows[0] == "timestamp_us,slope,intercept"
+    assert rows[1] == "1001,0.5,120.0"
 
 
 def test_experiment_closes_sensor_after_run_experiment():
@@ -294,6 +294,6 @@ def test_dvs_writer_records_native_batches_without_rebuilding_events_in_python(t
     csv_path = tmp_path / "native_cam1_hough.csv"
     rows = csv_path.read_text(encoding="utf-8").strip().splitlines()
     assert rows == [
-        "timestamp_us,lin_m,lin_b",
-        "1001,4.0,5.0",
+        "timestamp_us,slope,intercept",
+        "1001,nan,nan",
     ]

@@ -119,8 +119,7 @@ class DVSWriter:
                 native_batches,
                 queued_raw_events,
                 self._measurement_timestamp_us(processed_events, raw_events, native_batches),
-                self._state_value(algo, "linear_m"),
-                self._state_value(algo, "linear_b"),
+                *self._observation_values(observation),
             )
         )
 
@@ -159,8 +158,8 @@ class DVSWriter:
             self._csv_handle,
             fieldnames=[
                 "timestamp_us",
-                "lin_m",
-                "lin_b",
+                "slope",
+                "intercept",
             ],
         )
         self._csv_writer.writeheader()
@@ -213,12 +212,12 @@ class DVSWriter:
                 "writeEvents overload for multiple event streams."
             ) from exc
 
-    def _write_hough_row(self, *, timestamp_us: int, lin_m: float, lin_b: float) -> None:
+    def _write_hough_row(self, *, timestamp_us: int, slope: float, intercept: float) -> None:
         self._csv_writer.writerow(
             {
                 "timestamp_us": timestamp_us,
-                "lin_m": lin_m,
-                "lin_b": lin_b,
+                "slope": slope,
+                "intercept": intercept,
             }
         )
 
@@ -289,10 +288,21 @@ class DVSWriter:
         return int(max(time.time_ns() // 1000, self._last_timestamp_us + 1))
 
     @staticmethod
-    def _state_value(algo, attr_name: str) -> float:
-        state = getattr(algo, "state", None)
-        value = getattr(state, attr_name, np.nan)
-        return float(value)
+    def _observation_values(observation) -> tuple[float, float]:
+        if observation is None:
+            return np.nan, np.nan
+        if isinstance(observation, tuple):
+            if len(observation) >= 2:
+                slope, intercept = observation[0], observation[1]
+            else:
+                return np.nan, np.nan
+        else:
+            slope = getattr(observation, "slope", np.nan)
+            intercept = getattr(observation, "intercept", np.nan)
+
+        slope = np.nan if slope is None else float(slope)
+        intercept = np.nan if intercept is None else float(intercept)
+        return slope, intercept
 
     def _writer_loop(self) -> None:
         queue = self._queue
@@ -304,13 +314,13 @@ class DVSWriter:
             if payload is self._sentinel:
                 break
 
-            native_batches, raw_events, timestamp_us, lin_m, lin_b = payload
+            native_batches, raw_events, timestamp_us, slope, intercept = payload
             if native_batches:
                 self._write_native_batches(native_batches)
             elif raw_events is not None and len(raw_events) > 0:
                 all_store = self._events_to_store(raw_events)
                 self._write_event_store(all_store, self.DEFAULT_STREAM)
-            self._write_hough_row(timestamp_us=timestamp_us, lin_m=lin_m, lin_b=lin_b)
+            self._write_hough_row(timestamp_us=timestamp_us, slope=slope, intercept=intercept)
 
     def _normalize_native_batches(self, raw_event_batches) -> list[Any] | None:
         if raw_event_batches is None:

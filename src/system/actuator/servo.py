@@ -16,7 +16,7 @@ class ServoParams:
 SERVO_PRESETS = {
     "default": {
         "mechanism": "five_bar_tps:default",
-        "port":      "COM8",
+        "port":      "COM7",
         "baud":      115200,
         "frequency": 333.0,
     }
