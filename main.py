@@ -8,6 +8,8 @@ Usage:
     python main.py --estimators lpf:test,kalman:test
     python main.py --set system.workspace.safe_radius=0.05
     python main.py --list                   # show all available presets
+    python main.py --preset real --set system.sensor.writer.enabled=true --set system.sensor.writer.camera_id=1 --set system.sensor.writer.file_stem=hough_cam1 # generate dataset with aedat4 file and csv with slope and intercept history
+    python main.py --preset real --sensor real_dvs:snn # neural network based pencil tracking (in progress)
 """
 
 import argparse
