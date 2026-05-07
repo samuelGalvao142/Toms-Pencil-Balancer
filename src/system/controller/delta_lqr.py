@@ -41,9 +41,8 @@ class DeltaLQRParams:
     pos_ref_ki: float
     max_pos_ref_shift: float
 
-    # Tilt feedforward: accumulated I-term on position error, injected into u
-    tilt_ff_ki: float
-    max_tilt_ff: float
+    tilt_ref_ki: float
+    max_tilt_ref_shift: float
 
     max_delta_u: float | None = None
     max_command_radius: float | None = None
@@ -77,39 +76,26 @@ DELTA_LQR_PRESETS = {
         "max_delta_u": 2.0e-3,
         "max_command_radius": 7.0e-2,
 
-        "pos_ref_ki": 0.1,
-        "max_pos_ref_shift": 10e-3,
+        "pos_ref_ki": 0.15,
+        "max_pos_ref_shift": 500e-3,
 
-        # Tilt feedforward: slow I-term on position error -> injected into u
-        # Units: [actuator_units / (m * s)] — tune this carefully,
-        # start very small and increase until you see compensation
-        "tilt_ff_ki": 0.0,
-        "max_tilt_ff": 5.0e-2,
+        "tilt_ref_ki": 0.0,
+        "max_tilt_ref_shift": np.deg2rad(4.0),
     },
     "gentle": {
         "base": "default",
         "r_delta_u": 850,
     },
-    "strong": {
+    "faster": {
         "base": "default",
-        "q_pos": 0.5,
-        "q_vel": 0.0,
-        "q_tilt": 10.0,
-        "q_tilt_rate": 0.0,
-        "max_delta_u": 5.0e-3,
-        "r_delta_u": 1050,
+        "r_delta_u": 5.0,
+        "max_delta_u": 4.0e-3,
     },
 }
 
 
 class DeltaLQRController(BaseController):
-    """Discrete LQR that optimizes command increments and returns absolute position.
-
-    Tilt compensation is handled as a feedforward term accumulated from position
-    error (slow I-term), injected directly into u after the LQR step.  The LQR's
-    own tilt reference stays fixed at x_ref_true so the error signal is never
-    corrupted by the compensation intent.
-    """
+    """Discrete LQR that optimizes command increments and returns absolute position."""
 
     def __init__(self, params: DeltaLQRParams):
         from src.system.plant.dynamics_model import BuildLinearModel
@@ -153,8 +139,7 @@ class DeltaLQRController(BaseController):
         self.K = np.asarray(self.K, dtype=float)
 
         self._x_ref_true = x_ref.as_vector()   # never changes
-        self.x_ref_lqr = x_ref.as_vector().copy()  # only position entries drift;
-                                                    # tilt entries stay == _x_ref_true
+        self.x_ref_lqr = x_ref.as_vector().copy()  # drifts with pos + tilt integrators
 
         self._u_ref_true = -np.linalg.pinv(B_c) @ A_c  # [m x n], computed once
         self.u_ref_lqr = (self._u_ref_true @ self.x_ref_lqr).ravel()
@@ -167,15 +152,11 @@ class DeltaLQRController(BaseController):
             dtype=float,
         )
 
-        # Position integrator: shifts position reference to cancel steady-state offset
         self.pos_ref_ki = params.pos_ref_ki
         self.max_pos_ref_shift = params.max_pos_ref_shift
 
-        # Tilt feedforward: accumulated I-term on position error.
-        # Injected as a direct additive offset to u, bypassing the LQR error signal.
-        self.tilt_ff_ki = float(params.tilt_ff_ki)
-        self.max_tilt_ff = float(params.max_tilt_ff)
-        self._tilt_ff = np.zeros(m, dtype=float)  # [u_x_ff, u_y_ff]
+        self.tilt_ref_ki = float(params.tilt_ref_ki)
+        self.max_tilt_ref_shift = float(params.max_tilt_ref_shift)
 
         self.actuator_dt = float(params.timing.actuator_dt)
 
@@ -215,12 +196,10 @@ class DeltaLQRController(BaseController):
     def _clamp(self, value: float, max_value: float, init_val: float) -> float:
         return float(np.clip(value, init_val - max_value, init_val + max_value))
 
-    def _print_ref(self, state: State) -> None:
-        state.print_est()
+    def _print_ref(self) -> None:
         print(
             f"ref: px: {self.x_ref_lqr[0]*1000:.2f}  py: {self.x_ref_lqr[4]*1000:.2f}  "
-            f"ax: {np.rad2deg(self.x_ref_lqr[2]):.3f}  ay: {np.rad2deg(self.x_ref_lqr[6]):.3f}  "
-            f"tilt_ff: {self._tilt_ff}"
+            f"ax: {np.rad2deg(self.x_ref_lqr[2]):.3f}  ay: {np.rad2deg(self.x_ref_lqr[6]):.3f}"
         )
 
     # ------------------------------------------------------------------
@@ -234,7 +213,7 @@ class DeltaLQRController(BaseController):
         return ControlInput(float(self.u_ref_lqr[0]), float(self.u_ref_lqr[1]))
 
     def _update_integrator(self, state: State) -> None:
-        # ---- Position reference integrator (unchanged) ----
+        # Position reference integrator
         pos_err_x = state.px - self._x_ref_true[0]
         pos_err_y = state.py - self._x_ref_true[4]
 
@@ -244,22 +223,17 @@ class DeltaLQRController(BaseController):
         self.x_ref_lqr[0] = self._clamp(self.x_ref_lqr[0], self.max_pos_ref_shift, self._x_ref_true[0])
         self.x_ref_lqr[4] = self._clamp(self.x_ref_lqr[4], self.max_pos_ref_shift, self._x_ref_true[4])
 
-        # Tilt entries in x_ref_lqr are intentionally NOT touched here.
-        # They stay equal to _x_ref_true so the LQR error signal is clean.
+        # Tilt reference integrator
+        tilt_err_x = state.ax - self._x_ref_true[2]
+        tilt_err_y = state.ay - self._x_ref_true[6]
 
-        # Refresh u_ref from the (position-shifted) reference
+        self.x_ref_lqr[2] -= self.tilt_ref_ki * tilt_err_x * self.actuator_dt
+        self.x_ref_lqr[6] -= self.tilt_ref_ki * tilt_err_y * self.actuator_dt
+
+        self.x_ref_lqr[2] = self._clamp(self.x_ref_lqr[2], self.max_tilt_ref_shift, self._x_ref_true[2])
+        self.x_ref_lqr[6] = self._clamp(self.x_ref_lqr[6], self.max_tilt_ref_shift, self._x_ref_true[6])
+
         self.u_ref_lqr = (self._u_ref_true @ self.x_ref_lqr).ravel()
-
-        # ---- Tilt feedforward I-term ----
-        # Accumulate position error into a direct actuator offset.
-        # A persistent positive pos_err_x means the table is consistently off-center;
-        # we build up a tilt compensation command to fight whatever is causing it.
-        self._tilt_ff[0] += self.tilt_ff_ki * pos_err_x * self.actuator_dt
-        self._tilt_ff[1] += self.tilt_ff_ki * pos_err_y * self.actuator_dt
-
-        # Clamp each axis independently
-        self._tilt_ff[0] = float(np.clip(self._tilt_ff[0], -self.max_tilt_ff, self.max_tilt_ff))
-        self._tilt_ff[1] = float(np.clip(self._tilt_ff[1], -self.max_tilt_ff, self.max_tilt_ff))
 
     def compute(self, state: State) -> ControlInput:
         x_err = state.as_vector() - self.x_ref_lqr
@@ -270,12 +244,11 @@ class DeltaLQRController(BaseController):
         delta_u = -(self.K @ xi_err).ravel()
         delta_u = self._limit_delta_u(delta_u)
 
-        # LQR command + tilt feedforward injected here, outside the error signal
-        u = self._u_prev + delta_u + self._tilt_ff
+        u = self._u_prev + delta_u
 
         u = self._limit_command_radius(u)
         
-        #self._print_ref(state)
+        self._print_ref()
 
         return ControlInput(float(u[0]), float(u[1]))
 
@@ -286,12 +259,8 @@ class DeltaLQRController(BaseController):
     def reset(self, x_hat: State | None = None):
         print("delta_lqr reset", x_hat)
 
-        # Reset position integrator
         self.x_ref_lqr = self._x_ref_true.copy()
         self.u_ref_lqr = (self._u_ref_true @ self.x_ref_lqr).ravel()
-
-        # Reset tilt feedforward accumulator
-        self._tilt_ff = np.zeros_like(self._tilt_ff)
 
         self._u_prev = self.u_ref_lqr.copy()
         if x_hat is not None:

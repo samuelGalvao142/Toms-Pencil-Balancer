@@ -21,7 +21,7 @@ class PlantParams:
 
 PLANT_PRESETS = {
     "default": {
-        "g": 9.81, "com_length": 0.15, "tau": 0.03, "zeta": 0.8,
+        "g": 9.81, "com_length": 12.5e-2, "tau": 0.03, "zeta": 0.8,
         "max_acc": 9.81 * 5, "num_states": 8,
     }
 }
