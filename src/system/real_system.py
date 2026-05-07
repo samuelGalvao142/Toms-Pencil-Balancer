@@ -83,6 +83,10 @@ REAL_SYSTEM_PRESETS = {
         "plants": ["placing:angle_only", "placing:angle_only"],
         "controllers": ["null:default", "accel_pole:default"],
     },
+    "real_snn": {
+        "base": "real",
+        "sensor": "real_dvs:snn"
+    },
 }
 
 
