@@ -297,3 +297,60 @@ def test_dvs_writer_records_native_batches_without_rebuilding_events_in_python(t
         "timestamp_us,slope,intercept",
         "1001,nan,nan",
     ]
+
+
+def test_real_dvs_recording_controls_both_camera_writers(tmp_path: Path):
+    from src.system.sensor.interface.real_dvs import RealEventCameraInterface
+
+    class StubWriter:
+        def __init__(self, cam_id: int):
+            self.enabled = True
+            self.is_recording = False
+            self.aedat4_path = tmp_path / f"trial_cam{cam_id}.aedat4"
+            self.csv_path = tmp_path / f"trial_cam{cam_id}_hough.csv"
+            self.start_calls = 0
+            self.stop_calls = 0
+            self.close_calls = 0
+
+        def start_recording(self):
+            self.start_calls += 1
+            self.is_recording = True
+            return True
+
+        def stop_recording(self):
+            self.stop_calls += 1
+            was_recording = self.is_recording
+            self.is_recording = False
+            return was_recording
+
+        def close(self):
+            self.close_calls += 1
+
+    sensor = RealEventCameraInterface.__new__(RealEventCameraInterface)
+    sensor._writers = {
+        1: StubWriter(1),
+        2: StubWriter(2),
+    }
+
+    assert sensor.recording_enabled is True
+    assert sensor.recording_active is False
+
+    paths = sensor.recording_paths
+    assert paths[1] == (
+        tmp_path / "trial_cam1.aedat4",
+        tmp_path / "trial_cam1_hough.csv",
+    )
+    assert paths[2] == (
+        tmp_path / "trial_cam2.aedat4",
+        tmp_path / "trial_cam2_hough.csv",
+    )
+
+    assert sensor.start_recording() is True
+    assert sensor.recording_active is True
+    assert sensor._writers[1].start_calls == 1
+    assert sensor._writers[2].start_calls == 1
+
+    assert sensor.toggle_recording() is False
+    assert sensor.recording_active is False
+    assert sensor._writers[1].stop_calls == 1
+    assert sensor._writers[2].stop_calls == 1

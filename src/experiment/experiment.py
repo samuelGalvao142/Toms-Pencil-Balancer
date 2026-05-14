@@ -258,14 +258,25 @@ class Experiment:
 
         is_recording = sensor.toggle_recording()
         state_text = "started" if is_recording else "stopped"
-        paths = getattr(sensor, "recording_paths", (None, None))
-        aedat4_path, csv_path = paths if isinstance(paths, tuple) and len(paths) == 2 else (None, None)
         if is_recording:
             print(f"[experiment] recording {state_text}")
-            if aedat4_path is not None:
-                print(f"[experiment] aedat4 -> {aedat4_path}")
-            if csv_path is not None:
-                print(f"[experiment] hough csv -> {csv_path}")
+            paths = getattr(sensor, "recording_paths", {})
+            if isinstance(paths, dict):
+                for cam_id in sorted(paths):
+                    cam_paths = paths.get(cam_id)
+                    if not isinstance(cam_paths, tuple) or len(cam_paths) != 2:
+                        continue
+                    aedat4_path, csv_path = cam_paths
+                    if aedat4_path is not None:
+                        print(f"[experiment] cam{cam_id} aedat4 -> {aedat4_path}")
+                    if csv_path is not None:
+                        print(f"[experiment] cam{cam_id} hough csv -> {csv_path}")
+            elif isinstance(paths, tuple) and len(paths) == 2:
+                aedat4_path, csv_path = paths
+                if aedat4_path is not None:
+                    print(f"[experiment] aedat4 -> {aedat4_path}")
+                if csv_path is not None:
+                    print(f"[experiment] hough csv -> {csv_path}")
         else:
             print(f"[experiment] recording {state_text}")
         return True

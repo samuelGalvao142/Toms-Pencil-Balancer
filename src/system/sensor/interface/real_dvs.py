@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import threading
 import time
@@ -116,11 +116,18 @@ class RealEventCameraInterface(VisionModelBase):
 
         self._reader1 = DVSReader(cam1_device, noise_filter_duration_ms=noise_filter_duration_ms)
         self._reader2 = DVSReader(cam2_device, noise_filter_duration_ms=noise_filter_duration_ms)
-        self._writer = DVSWriter(
-            p.writer,
-            width=self.cam_width_px,
-            height=self.cam_height_px,
-        )
+        self._writers = {
+            1: DVSWriter(
+                replace(p.writer, camera_id=1),
+                width=self.cam_width_px,
+                height=self.cam_height_px,
+            ),
+            2: DVSWriter(
+                replace(p.writer, camera_id=2),
+                width=self.cam_width_px,
+                height=self.cam_height_px,
+            ),
+        }
 
         self._latest1: CameraObservation | None = None
         self._latest2: CameraObservation | None = None
@@ -187,8 +194,9 @@ class RealEventCameraInterface(VisionModelBase):
                     continue
 
                 last_algo_error = None
-                if self._writer.enabled and _cam_id == self._writer.camera_id:
-                    self._writer.record_batch(
+                writer = self._writers.get(_cam_id)
+                if writer is not None and writer.enabled:
+                    writer.record_batch(
                         raw_event_batches=native_batches,
                         raw_events=raw_events,
                         processed_events=events,
@@ -215,24 +223,37 @@ class RealEventCameraInterface(VisionModelBase):
 
     @property
     def recording_enabled(self) -> bool:
-        return bool(self._writer.enabled)
+        return any(writer.enabled for writer in self._writers.values())
 
     @property
     def recording_active(self) -> bool:
-        return bool(self._writer.is_recording)
+        return any(writer.is_recording for writer in self._writers.values())
 
     @property
-    def recording_paths(self) -> tuple[Path | None, Path | None]:
-        return self._writer.aedat4_path, self._writer.csv_path
+    def recording_paths(self) -> dict[int, tuple[Path | None, Path | None]]:
+        return {
+            cam_id: (writer.aedat4_path, writer.csv_path)
+            for cam_id, writer in self._writers.items()
+        }
 
     def start_recording(self) -> bool:
-        return self._writer.start_recording()
+        started_any = False
+        for writer in self._writers.values():
+            if writer.enabled:
+                started_any = writer.start_recording() or started_any
+        return started_any
 
     def stop_recording(self) -> bool:
-        return self._writer.stop_recording()
+        stopped_any = False
+        for writer in self._writers.values():
+            stopped_any = writer.stop_recording() or stopped_any
+        return stopped_any
 
     def toggle_recording(self) -> bool:
-        return self._writer.toggle_recording()
+        if self.recording_active:
+            self.stop_recording()
+            return False
+        return self.start_recording()
 
     def get_y(self, state_true=None) -> Measurement:
         cams_camnorm = self.get_z()
@@ -304,6 +325,7 @@ class RealEventCameraInterface(VisionModelBase):
         self._stop.set()
         self._thread1.join(timeout=1.0)
         self._thread2.join(timeout=1.0)
-        self._writer.close()
+        for writer in self._writers.values():
+            writer.close()
         self._reader1.close()
         self._reader2.close()
