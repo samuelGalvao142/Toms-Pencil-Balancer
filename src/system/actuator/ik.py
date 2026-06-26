@@ -57,31 +57,18 @@ def ik_solve(xd, yd):
         t4 = 97
 
     if EL and ER:
-        #branch selection
-        if EL[0][0] < EL[1][0]:
-            ELx, ELy = EL[0]
-        else:
-            ELx, ELy = EL[1]
 
-        if ER[0][0] > ER[1][0]:
-            ERx, ERy = ER[0]
-        else:
-            ERx, ERy = ER[1]
+        E1 = -2*la*(yd-320)
+        F1 = 2*la*(xd-213)
+        G1 = xd**2+yd**2+la**2-lb**2+213**2+320**2-426*xd-640*yd
+        d1 = E1**2+F1**2-G1**2
 
-        dxL = ELx - SLx
-        dyL = ELy - SLy
+        E4 = 2*la*(xd-240)
+        F4 = 2*la*(yd-288)
+        G4 = xd**2+yd**2+la**2-lb**2+240**2+288**2-480*xd-576*yd
+        d4 = E4**2+F4**2-G4**2
 
-        dxR = ERx - SRx
-        dyR = ERy - SRy
-
-        # global angles
-        thetaL_global = np.degrees(np.arctan2(dyL, dxL))
-        thetaR_global = np.degrees(np.arctan2(dyR, dxR))
-
-        # LEFT: from +y axis, CCW+
-        t1 = (thetaL_global - 90 + 360) % 360
-
-        # RIGHT: from -x axis, CCW+
-        t4 = (thetaR_global - 180 + 360) % 360
+        t1 = 2*np.atan((-F1-np.sqrt(d1)) / (G1-E1))*180/np.pi
+        t4 = 2*np.atan((-F4+np.sqrt(d4)) / (G4-E4))*180/np.pi
 
     return t1, t4

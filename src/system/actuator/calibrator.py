@@ -212,12 +212,12 @@ def _calibration_loop(
 
                 if dx != 0.0 or dy != 0.0:
                     servo_xy = servo_xy + np.array([dx, dy])
-                    t1, t4 = _get_angles(mechanism, servo_xy)
+                    t1, t4 = ik.ik_solve(servo_xy[0], servo_xy[1])
                     _send_angles(ser, t1, t4)
                     current_xy = servo_xy.copy()
 
             # ── Render ───────────────────────────────────────────────────────
-            t1, t4 = _get_angles(mechanism, servo_xy)
+            t1, t4 = ik.ik_solve(servo_xy[0], servo_xy[1])
             stdscr.erase()
             _draw(stdscr, 0, f"TPS Actuator Calibrator  [{idx + 1}/{total}]")
             _draw(stdscr, 1, "WASD/arrows: nudge  Space: accept  Enter: skip  R: reset  B: back  Q: quit+save")
