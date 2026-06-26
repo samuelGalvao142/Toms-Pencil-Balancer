@@ -27,7 +27,6 @@ from pathlib import Path
 
 import numpy as np
 import serial
-import ik
 
 from src.shared import ControlInput
 from src.system.actuator.mech import (
@@ -84,14 +83,14 @@ def _smooth_move(
     start_xy = np.asarray(start_xy, dtype=float)
     end_xy   = np.asarray(end_xy,   dtype=float)
     if np.allclose(start_xy, end_xy):
-        t1, t4 = ik.ik_solve(end_xy[0], end_xy[1])
+        t1, t4 = _get_angles(mechanism, end_xy)
         _send_angles(ser, t1, t4)
         return
     n = max(int(np.ceil(duration_s / 0.02)), 1)
     for i in range(1, n + 1):
         alpha = i / n
         xy = (1.0 - alpha) * start_xy + alpha * end_xy
-        t1, t4 = ik.ik_solve(xy[0], xy[1])
+        t1, t4 = _get_angles(mechanism, xy)
         _send_angles(ser, t1, t4)
         if i < n:
             time.sleep(0.02)
@@ -184,7 +183,7 @@ def _calibration_loop(
                     last_action = "Back to previous point."
                     break
                 elif key == ord(" "):
-                    t1, t4 = ik.ik_solve(desired_xy[0], desired_xy[1])
+                    t1, t4 = _get_angles(mechanism, servo_xy)
                     accepted.append({
                         "desired_xy_m": desired_xy.tolist(),
                         "servo_xy_m":   servo_xy.tolist(),
@@ -196,7 +195,116 @@ def _calibration_loop(
                     last_action = "Accepted."
                     break
                 elif key in (10, 13, curses.KEY_ENTER):
-                    t1, t4 = ik.ik_solve(desired_xy[0], desired_xy)
+                    t1, t4 = _get_angles(mechanism, servo_xy)
+                    accepted.append({
+                        "desired_xy_m": desired_xy.tolist(),
+                        "servo_xy_m":   servo_xy.tolist(),
+                        "theta1_deg":   t1,
+                        "theta4_deg":   t4,
+                        "skipped":      True,
+                    })
+                    idx += 1
+                    last_action = "Skipped (recorded as-is)."
+                    break
+                elif key in (ord("q"), ord("Q")):
+                    return accepted
+
+                if dx != 0.0 or dy != 0.0:
+                    servo_xy = servo_xy + np.array([dx, dy])
+                    t1, t4 = _get_angles(mechanism, servo_xy)
+                    _send_angles(ser, t1, t4)
+                    current_xy = servo_xy.copy()
+
+            # ── Render ───────────────────────────────────────────────────────
+            t1, t4 = _get_angles(mechanism, servo_xy)
+            stdscr.erase()
+            _draw(stdscr, 0, f"TPS Actuator Calibrator  [{idx + 1}/{total}]")
+            _draw(stdscr, 1, "WASD/arrows: nudge  Space: accept  Enter: skip  R: reset  B: back  Q: quit+save")
+            _draw(stdscr, 2, f"Grid step: {args.grid_step * 1000:.0f} mm   Nudge: {nudge_step_m * 1000:.1f} mm   Half-side: {args.half_side * 100:.1f} cm   Cmd: {args.cmd}")
+            _draw(stdscr, 4, f"Target:  ({desired_xy[0]:+.4f}, {desired_xy[1]:+.4f}) m  =  ({desired_xy[0]*100:+.2f}, {desired_xy[1]*100:+.2f}) cm")
+            _draw(stdscr, 5, f"Command: ({servo_xy[0]:+.4f}, {servo_xy[1]:+.4f}) m")
+            _draw(stdscr, 6, f"Angles:  th1={t1:.2f} deg   th4={t4:.2f} deg")
+            _draw(stdscr, 8, f"Seed: {seed_src}")
+            _draw(stdscr, 9, f"Accepted so far: {len(accepted)}/{total}")
+            _draw(stdscr, 10, f"Last action: {last_action}")
+            stdscr.refresh()
+
+    return accepted
+
+def _auto_calibrate(
+    stdscr,
+    *,
+    mechanism: Mechanism,
+    ser: serial.Serial,
+    grid_points: list[np.ndarray],
+    nudge_step_m: float,
+    existing: dict[str, dict],
+    args,
+) -> list[dict]:
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    stdscr.timeout(50)
+
+    accepted: list[dict] = []
+    last_action = "Starting calibration."
+    current_xy = np.zeros(2)
+
+    total = len(grid_points)
+    idx = 0
+
+    while idx < total:
+        desired_xy = grid_points[idx]
+        key_str = _xy_key(desired_xy)
+
+        saved = existing.get(key_str)
+        if args.cmd == "interpolation":
+            seed_xy  = desired_xy.copy()
+            seed_src = "desired (interpolation mode)"
+        else:
+            seed_xy  = np.array(saved["servo_xy_m"], dtype=float) if saved else desired_xy.copy()
+            seed_src = "saved" if saved else "FK/IK nominal"
+
+        servo_xy = seed_xy.copy()
+        _smooth_move(mechanism, ser, current_xy, servo_xy)
+        current_xy = servo_xy.copy()
+        last_action = f"Moved to {seed_src} seed."
+
+        while True:
+            key = stdscr.getch()
+            dx = dy = 0.0
+
+            if key != -1:
+                if key in (ord("w"), ord("W"), curses.KEY_UP):
+                    dy = +nudge_step_m*10;  last_action = "Nudged +Y"
+                elif key in (ord("s"), ord("S"), curses.KEY_DOWN):
+                    dy = -nudge_step_m*10;  last_action = "Nudged -Y"
+                elif key in (ord("a"), ord("A"), curses.KEY_LEFT):
+                    dx = -nudge_step_m*10;  last_action = "Nudged -X"
+                elif key in (ord("d"), ord("D"), curses.KEY_RIGHT):
+                    dx = +nudge_step_m*10;  last_action = "Nudged +X"
+                elif key in (ord("r"), ord("R")):
+                    servo_xy = seed_xy.copy()
+                    _smooth_move(mechanism, ser, current_xy, servo_xy, duration_s=0.2)
+                    current_xy = servo_xy.copy()
+                    last_action = "Reset to seed."
+                elif key in (ord("b"), ord("B")):
+                    idx = max(0, idx - 1)
+                    last_action = "Back to previous point."
+                    break
+                elif key == ord(" "):
+                    t1, t4 = _get_angles(mechanism, servo_xy)
+                    accepted.append({
+                        "desired_xy_m": desired_xy.tolist(),
+                        "servo_xy_m":   servo_xy.tolist(),
+                        "theta1_deg":   t1,
+                        "theta4_deg":   t4,
+                        "skipped":      False,
+                    })
+                    idx += 1
+                    last_action = "Accepted."
+                    break
+                elif key in (10, 13, curses.KEY_ENTER):
+                    t1, t4 = _get_angles(mechanism, servo_xy)
                     accepted.append({
                         "desired_xy_m": desired_xy.tolist(),
                         "servo_xy_m":   servo_xy.tolist(),
