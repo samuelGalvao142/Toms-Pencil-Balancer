@@ -28,13 +28,13 @@ class ServoController:
 
     def save(self):
         self.send("SAVE")
-        
+       
     def next_cal(self):
         self.send("T")
 
     def prev_cal(self):
         self.send("R")
-        
+       
 
 
 ctrl = ServoController("/dev/ttyUSB0")
@@ -63,30 +63,18 @@ def on_press(key):
         elif key.char == 'd':
             print("servo2 +1")
             ctrl.jog(2, STEP)
-            
-        elif key.char == 't':
-            print("Next calibration point")
-            ctrl.next_cal()
-
-        elif key.char == 'r':
-            print("Previous calibration point")
-            ctrl.prev_cal()
 
         elif key.char == 's':
             print("Saving calibration")
             ctrl.save()
 
-        elif key.char == 'c':
-            print("Calibration mode")
-            ctrl.set_mode("CAL")
-        
-        elif key.char == 'i':
-            print("Idle mode")
-            ctrl.set_mode("IDLE")
+        elif key.char == 'r':
+            print("previous cal point")
+            ctrl.prev_cal()
 
-        elif key.char == 'x':
-            print("Experiment mode")
-            ctrl.set_mode("EXP")
+        elif key.char == 't':
+            print("next cal point")
+            ctrl.next_cal()
 
     except AttributeError:
         pass
